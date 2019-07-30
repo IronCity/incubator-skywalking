@@ -21,6 +21,8 @@ package org.apache.skywalking.apm.agent.core.remote;
 import io.grpc.Channel;
 import io.grpc.stub.StreamObserver;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+
 import org.apache.skywalking.apm.agent.core.boot.*;
 import org.apache.skywalking.apm.agent.core.context.*;
 import org.apache.skywalking.apm.agent.core.context.trace.TraceSegment;
@@ -72,6 +74,7 @@ public class TraceSegmentServiceClient implements BootService, IConsumer<TraceSe
 
     @Override
     public void shutdown() throws Throwable {
+        TracingContext.ListenerManager.remove(this);
         carrier.shutdownConsumers();
     }
 
@@ -84,7 +87,7 @@ public class TraceSegmentServiceClient implements BootService, IConsumer<TraceSe
     public void consume(List<TraceSegment> data) {
         if (CONNECTED.equals(status)) {
             final GRPCStreamServiceStatus status = new GRPCStreamServiceStatus(false);
-            StreamObserver<UpstreamSegment> upstreamSegmentStreamObserver = serviceStub.collect(new StreamObserver<Commands>() {
+            StreamObserver<UpstreamSegment> upstreamSegmentStreamObserver = serviceStub.withDeadlineAfter(10, TimeUnit.SECONDS).collect(new StreamObserver<Commands>() {
                 @Override
                 public void onNext(Commands commands) {
 
@@ -110,13 +113,14 @@ public class TraceSegmentServiceClient implements BootService, IConsumer<TraceSe
                     UpstreamSegment upstreamSegment = segment.transform();
                     upstreamSegmentStreamObserver.onNext(upstreamSegment);
                 }
-                upstreamSegmentStreamObserver.onCompleted();
-
-                status.wait4Finish();
-                segmentUplinkedCounter += data.size();
             } catch (Throwable t) {
                 logger.error(t, "Transform and send UpstreamSegment to collector fail.");
             }
+
+            upstreamSegmentStreamObserver.onCompleted();
+
+            status.wait4Finish();
+            segmentUplinkedCounter += data.size();
         } else {
             segmentAbandonedCounter += data.size();
         }
